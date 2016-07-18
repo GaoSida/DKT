@@ -1,0 +1,6 @@
+model_checkpoint_path: "model@epoch280.ckpt"
+all_model_checkpoint_paths: "model@epoch200.ckpt"
+all_model_checkpoint_paths: "model@epoch220.ckpt"
+all_model_checkpoint_paths: "model@epoch240.ckpt"
+all_model_checkpoint_paths: "model@epoch260.ckpt"
+all_model_checkpoint_paths: "model@epoch280.ckpt"
