@@ -1,0 +1,6 @@
+model_checkpoint_path: "model@epoch4000.ckpt"
+all_model_checkpoint_paths: "model@epoch0.ckpt"
+all_model_checkpoint_paths: "model@epoch1000.ckpt"
+all_model_checkpoint_paths: "model@epoch2000.ckpt"
+all_model_checkpoint_paths: "model@epoch3000.ckpt"
+all_model_checkpoint_paths: "model@epoch4000.ckpt"
