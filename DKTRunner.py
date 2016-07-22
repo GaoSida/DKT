@@ -1,12 +1,15 @@
 import tensorflow as tf
+import numpy as np
 from sklearn import metrics
 import random
 import pickle
 
 class DKTRunner(object):
     
-    def train(self, hps, graph, data_generator):
-        with tf.Session(graph=graph) as session:
+    def train(self, hps, dkt_graph, data_generator):
+        num_skills = hps.num_skills
+        random.seed(1234)
+        with tf.Session(graph=dkt_graph.graph) as session:
             # Initialize
             tf.initialize_all_variables().run()
             
@@ -15,23 +18,22 @@ class DKTRunner(object):
                 pred_all = []
                 truth_all = []
                 for batch in data_generator.train_batches:
-                    feed_dict = {maxlen : batch.maxlen}
-                    for i in range(batch.maxlen):
-                        feed_dict[inputs[i]] = batch.inputs[i]
-                        feed_dict[skill_labels[i]] = batch.skill_labels[i]
-                        feed_dict[result_labels[i]] = batch.result_labels[i]
+                    feed_dict = dict()    
+                    feed_dict[dkt_graph.inputs] = batch.inputs[:-1]
+                    feed_dict[dkt_graph.skill_labels] = batch.skill_labels
+                    feed_dict[dkt_graph.result_labels] = batch.result_labels
                         
-                    _, l, pred = session.run([optimizer, loss, prediction], feed_dict=feed_dict)
+                    _, l, pred = session.run([dkt_graph.optimizer, dkt_graph.loss, dkt_graph.prediction], feed_dict=feed_dict)
                     loss_sum += l
-                    skill_label_all = np.concatenate(batch.skill_labels, axis=0)
+                    skill_label_all = np.reshape(batch.skill_labels, [-1, num_skills])
+                    result_label_all = np.reshape(batch.result_labels, [-1])
                     # Exclude padded actions
                     for i in range(len(pred)):
                         if np.sum(skill_label_all[i]) != 0:
                             pred_all.append(pred[i])
-                            truth_all.append(batch.result_labels[i])
+                            truth_all.append(result_label_all[i])
                 
-                print len(pred_all)
-                print "epoch " + str(epoch) + ": loss = " + str(loss_sum)
+                print "epoch " + str(epoch) + ": loss = " + str(loss_sum / len(data_generator.train_batches))
                 print "Train AUC = " + str(metrics.roc_auc_score(truth_all, pred_all))
                 
                 # shuffle the train set after every epoch
@@ -42,29 +44,29 @@ class DKTRunner(object):
                     truth_all = []
                     all_status_pred = []
                     for batch in data_generator.test_batches:
-                        feed_dict = {maxlen : batch.maxlen}
-                        for i in range(batch.maxlen):
-                            feed_dict[inputs[i]] = batch.inputs[i]
-                            feed_dict[skill_labels[i]] = batch.skill_labels[i]
-                            feed_dict[result_labels[i]] = np.zeros([hps.batch_size, ])    # No need to give the target
+                        feed_dict = dict()    
+                        feed_dict[dkt_graph.inputs] = batch.inputs[:-1]
+                        feed_dict[dkt_graph.skill_labels] = batch.skill_labels
+                        feed_dict[dkt_graph.result_labels] = np.zeros([batch.maxlen ,hps.batch_size])    # No need to give the target
                             
                         if epoch % hps.save_frequency == 0:
-                            status_pred, pred = session.run([test_status, test_prediction], feed_dict=feed_dict)
+                            status_pred, pred = session.run([dkt_graph.test_status, dkt_graph.test_prediction], feed_dict=feed_dict)
                             all_status_pred.append(status_pred)
                         else:
-                            pred = test_prediction.eval(feed_dict)
+                            pred = dkt_graph.test_prediction.eval(feed_dict)
 
-                        skill_label_all = np.concatenate(batch.skill_labels, axis=0)
+                        skill_label_all = np.reshape(batch.skill_labels, [-1, num_skills])
+                        result_label_all = np.reshape(batch.result_labels, [-1])
                         for i in range(len(pred)):
                             if np.sum(skill_label_all[i]) != 0:
                                 pred_all.append(pred[i])
-                                truth_all.append(batch.result_labels[i])
-                            
-                    print len(pred_all)
+                                truth_all.append(result_label_all[i])
+                    
+
                     print "Test AUC = " + str(metrics.roc_auc_score(truth_all, pred_all))
                     print "Test accuracy = " + str(metrics.accuracy_score(truth_all, np.array(pred_all) > 0.5)) + "    "
                     
-                    if epoch % hp.save_frequency == 0:
+                    if epoch % hps.save_frequency == 0:
                         pred_action = file("prediction@epoch_" + str(epoch) + '.csv', 'w')
                         pred_action.write('pred,truth\n')
                         for i in range(len(pred_all)):
@@ -76,6 +78,6 @@ class DKTRunner(object):
                         pickle.dump(all_status_pred, all_status_file)
                         all_status_file.close()
                 
-                        saver.save(session, "model@epoch" + str(epoch) + ".ckpt")
-                        
-                        
+                        dkt_graph.saver.save(session, "model@epoch" + str(epoch) + ".ckpt")
+
+

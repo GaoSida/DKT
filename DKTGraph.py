@@ -1,13 +1,41 @@
+# coding:utf-8
 import tensorflow as tf
 
 class DKTGraph(object):
-    def get_optimizer(self, name):
+    def get_optimizer(self, hps):
+        name = hps.optimizer
         if name == "adam":
-            return tf.train.AdamOptimizer()
+            return tf.train.AdamOptimizer(learning_rate=hps.learning_rate)
         elif name == "adadelta":
             return tf.train.AdadeltaOptimizer()
 
-    def __init__(self, hps):
+    def standard_lstm_cell(self, output_state_tuple, i):
+        o, state = tf.unpack(output_state_tuple)
+        x = tf.concat(1, [i, o])
+        input_gate = tf.sigmoid(tf.matmul(x, self.input_W) + self.input_b)
+        forget_gate = tf.sigmoid(tf.matmul(x, self.forget_W) + self.forget_b)
+        update = tf.tanh(tf.matmul(x, self.update_W) + self.update_b)
+        state = forget_gate * state + input_gate * update
+        output_gate = tf.sigmoid(tf.matmul(x, self.output_W) + self.output_b)
+        return tf.pack([output_gate * tf.tanh(state), state])
+
+    def peephole_lstm_cell(self, output_state_tuple, i):
+        o, state = tf.unpack(output_state_tuple)
+        x = tf.concat(1, [i, o])
+        input_gate = tf.sigmoid(tf.matmul(x, self.input_W) + tf.matmul(state, self.input_Peep) + self.input_b)
+        forget_gate = tf.sigmoid(tf.matmul(x, self.forget_W) + tf.matmul(state, self.forget_Peep) + self.forget_b)
+        update = tf.tanh(tf.matmul(x, self.update_W) + self.update_b)
+        state = forget_gate * state + input_gate * update
+        output_gate = tf.sigmoid(tf.matmul(x, self.output_W) + tf.matmul(state, self.forget_Peep) + self.output_b)
+        return tf.pack([output_gate * tf.tanh(state), state])
+
+    def get_lstm_cell(self, hps):
+        if hps.lstm_cell == 'standard':
+            return self.standard_lstm_cell
+        elif hps.lstm_cell == 'peephole':
+            return self.peephole_lstm_cell
+
+    def __init__(self, hps, data_generator):
         batch_size = hps.batch_size
         num_hidden = hps.num_hidden
         num_actions = hps.num_actions
@@ -16,86 +44,70 @@ class DKTGraph(object):
         init_stddev = hps.init_stddev
         clipping_norm = hps.clipping_norm
         dropout_keep = hps.dropout_keep
-        optimizer_name = hps.optimizer
 
         self.graph = tf.Graph()
         with self.graph.as_default():
+            tf.set_random_seed(1234)        # fix seed
             # Parameters
             # Input gate
-            input_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='input_W')
-            input_b = tf.Variable(tf.zeros([1, num_hidden]), name='input_b')
+            self.input_Peep = tf.Variable(tf.truncated_normal([num_hidden, num_hidden], init_mean, init_stddev), name='input_Peep')
+            self.input_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='input_W')
+            self.input_b = tf.Variable(tf.zeros([1, num_hidden]), name='input_b')
             # Forget gate
-            forget_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='forget_W')
-            forget_b = tf.Variable(tf.zeros([1, num_hidden]), name='forget_b')
+            self.forget_Peep = tf.Variable(tf.truncated_normal([num_hidden, num_hidden], init_mean, init_stddev), name='forget_Peep')
+            self.forget_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='forget_W')
+            self.forget_b = tf.Variable(tf.zeros([1, num_hidden]), name='forget_b')
             # Update cell:                             
-            update_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='update_W')
-            update_b = tf.Variable(tf.zeros([1, num_hidden]), name='update_b')
+            self.update_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='update_W')
+            self.update_b = tf.Variable(tf.zeros([1, num_hidden]), name='update_b')
             # Output gate:
-            output_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='output_W')
-            output_b = tf.Variable(tf.zeros([1, num_hidden]), name='output_b')
+            self.output_Peep = tf.Variable(tf.truncated_normal([num_hidden, num_hidden], init_mean, init_stddev), name='output_Peep')
+            self.output_W = tf.Variable(tf.truncated_normal([num_actions + num_hidden, num_hidden], init_mean, init_stddev), name='output_W')
+            self.output_b = tf.Variable(tf.zeros([1, num_hidden]), name='output_b')
             # initial output and state
             initial_output = tf.Variable(tf.truncated_normal([1, num_hidden], init_mean, init_stddev), name='initial_output')
             initial_state = tf.Variable(tf.truncated_normal([1, num_hidden], init_mean, init_stddev), name='initial_state')
             # Classifier weights and biases.
             classify_W = tf.Variable(tf.truncated_normal([num_hidden, num_skills], init_mean, init_stddev), name='classify_W')
             classify_b = tf.Variable(tf.zeros([num_skills]), name='classify_b')
-  
-            def lstm_cell(i, o, state):
-                x = tf.concat(1, [i, o])
-                input_gate = tf.sigmoid(tf.matmul(x, input_W) + input_b)
-                forget_gate = tf.sigmoid(tf.matmul(x, forget_W) + forget_b)
-                update = tf.tanh(tf.matmul(x, update_W) + update_b)
-                state = forget_gate * state + input_gate * update
-                output_gate = tf.sigmoid(tf.matmul(x, output_W) + output_b)
-                return output_gate * tf.tanh(state), state
 
             # Input data.
-            inputs = list()
-            skill_labels = list()
-            result_labels = list()
-            maxlen = tf.placeholder(tf.int32)
-            for _ in range(tf.to_int32(maxlen)):
-                inputs.append(tf.placeholder(tf.float32, shape=[batch_size, num_actions]))
-                skill_labels.append(tf.placeholder(tf.float32, shape=[batch_size, num_skills]))
-                result_labels.append(tf.placeholder(tf.float32, shape=[batch_size, ]))
+            self.inputs = tf.placeholder(tf.float32, shape=[None, batch_size, num_actions])
+            self.skill_labels = tf.placeholder(tf.float32, shape=[None, batch_size, num_skills])
+            self.result_labels = tf.placeholder(tf.float32, shape=[None, batch_size])
             
             # Forward propagate.
-            outputs = list()
-            output = tf.matmul(tf.ones([batch_size, 1]), initial_output)
-            state = tf.matmul(tf.ones([batch_size, 1]), initial_state)
-            outputs.append(output)
-            for i in inputs[:-1]:
-                output, state = lstm_cell(i, output, state)
-                outputs.append(output)
+            output_state_tuples = tf.scan(self.get_lstm_cell(hps), self.inputs,
+                                          initializer=tf.pack([tf.matmul(tf.ones([batch_size, 1]), initial_output), 
+                                                               tf.matmul(tf.ones([batch_size, 1]), initial_state)]))
+            outputs = output_state_tuples[:, 0, :, :]    # take out outputs
+            all_outputs = tf.concat(0, [[tf.matmul(tf.ones([batch_size, 1]), initial_output)], outputs])
 
             # prediction and loss
-            logits = tf.matmul(tf.dropout(tf.concat(0, outputs), dropout_keep), classify_W) + classify_b
-            logits_of_interest = tf.reduce_sum(tf.mul(logits, tf.concat(0, skill_labels)), 1)
-            prediction = tf.sigmoid(logits_of_interest)
-            truth = tf.reshape(tf.concat(0, result_labels), [-1])
-            loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits_of_interest, truth))
+            logits = tf.matmul(tf.nn.dropout(tf.reshape(all_outputs, [-1, num_hidden]), dropout_keep), classify_W) + classify_b
+            all_skill_labels = tf.reshape(self.skill_labels, [-1, num_skills])
+            logits_of_interest = tf.reduce_sum(tf.mul(logits, all_skill_labels), 1)
+            
+            self.prediction = tf.sigmoid(logits_of_interest)
+            truth = tf.reshape(self.result_labels, [-1])
+            # mask out irrelevant losses
+            cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits_of_interest, truth)
+            mask = tf.reduce_sum(all_skill_labels, 1)
+            self.loss = tf.reduce_sum(cross_entropy * mask) / tf.reduce_sum(all_skill_labels)
+            
     
-            optimizer = self.get_optimizer(optimizer_name)
-            gradients, var = zip(*optimizer.compute_gradients(loss))
+            self.optimizer = self.get_optimizer(hps)
+            gradients, var = zip(*self.optimizer.compute_gradients(self.loss))
             gradients, _ = tf.clip_by_global_norm(gradients, clipping_norm)
-            optimizer = optimizer.apply_gradients(zip(gradients, var))
-    
-            test_outputs = list()
-            test_output = initial_output
-            test_state = initial_state
-            test_outputs.append(test_output)
-            for i in inputs[:-1]:
-                test_output, test_state = lstm_cell(i, test_output, test_state)
-                test_outputs.append(test_output)
+            self.optimizer = self.optimizer.apply_gradients(zip(gradients, var))
 
-            test_logits = tf.matmul(tf.concat(0, test_outputs), classify_W) + classify_b
-            test_logits_of_interest = tf.reduce_sum(tf.mul(test_logits, tf.concat(0, question_labels)), 1)
+            # Testing
+            test_logits = tf.matmul(tf.reshape(all_outputs, [-1, num_hidden]), classify_W) + classify_b
+            test_logits_of_interest = tf.reduce_sum(tf.mul(test_logits, tf.reshape(self.skill_labels, [-1, num_skills])), 1)
     
-            test_status = tf.sigmoid(test_logits)
-            test_prediction = tf.sigmoid(test_logits_of_interest)
+            self.test_status = tf.sigmoid(test_logits)
+            self.test_prediction = tf.sigmoid(test_logits_of_interest)
     
-            saver = tf.train.Saver()     # To save models
-
-
+            self.saver = tf.train.Saver()     # To save models
 
 

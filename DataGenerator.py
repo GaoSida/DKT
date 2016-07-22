@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import random
 import math
 
 class DKTBatch(object):
@@ -43,15 +42,16 @@ class DataGenerator(object):
         train_record_cnt = 0
         test_record_cnt = 0
         
+        # filter len < minlen
         for i in range(tot_seqs):
-            if split_bitmap[i] == 0:
+            if split_bitmap[i] == 0 and len(seq[i]) >= minlen:
                 train_seqs.append(seqs[i])
                 train_record_cnt += len(seqs[i])
-            else:
+            elif split_bitmap[i] == 1 and len(seq[i]) >= minlen:
                 test_seqs.append(seqs[i])
                 test_record_cnt += len(seqs[i])
-        print "%d sequences, %d records for train" % (len(train_seqs), train_record_cnt)
-        print "%d sequences, %d records for test" % (len(test_seqs), test_record_cnt)
+        print "%d valid sequences, %d records for train" % (len(train_seqs), train_record_cnt)
+        print "%d valid sequences, %d records for test" % (len(test_seqs), test_record_cnt)
         
         # takes around 2GB memory:
         self.train_batches = list()
@@ -76,7 +76,7 @@ class DataGenerator(object):
         for start in range(0, len(all_seqs), batch_size):
             end = min(len(all_seqs), start + batch_size)
             seq_idx = len_order[start : end]    # index in all_seqs
-            maxlen = len_list[len_order[end - 1]]
+            maxlen = max(len_list[len_order[end - 1]], hps.pad_to)    
 
             # padded sequences: [skill, correct], empty [-1, -1]
             sequences = list()
@@ -84,12 +84,17 @@ class DataGenerator(object):
                 sequences.append([])
                 for _ in range(batch_size):
                     sequences[-1].append([-1, -1])
+
             for i in range(start, end):
                 idx_in_batch = i - start
                 seq = all_seqs[seq_idx[idx_in_batch]]
                 for j in range(len(seq)):
-                    sequences[j][idx_in_batch][0] = seq[j][0]
-                    sequences[j][idx_in_batch][1] = seq[j][1]
+                    if hps.padding_scheme == 'end_0':
+                        sequences[j][idx_in_batch][0] = seq[j][0]
+                        sequences[j][idx_in_batch][1] = seq[j][1]
+                    elif hps.padding_scheme == 'start_0':
+                        sequences[- j - 1][idx_in_batch][0] = seq[- j - 1][0]
+                        sequences[- j - 1][idx_in_batch][1] = seq[- j - 1][1]
 
             # inputs
             inputs = list()

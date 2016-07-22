@@ -1,9 +1,10 @@
 class Hyperparameter(object):
     def __init__(self, dataset_file, split_file,
-                 skill_cut=150, student_cut=5000, padding_scheme='end_0',
+                 skill_cut=150, student_cut=5000, minlen=2, padding_scheme='end_0',
                  num_hidden = 200, init_mean=0, init_stddev=0.001, batch_size=100,
-                 clipping_norm=1.0, dropout_keep=1.0, optimizer='adam',
-                 num_epochs=100, test_frequency=1, save_frequency=10):
+                 clipping_norm=2.0, dropout_keep=1.0, optimizer='adam', learning_rate=0.001,
+                 num_epochs=100, test_frequency=1, save_frequency=10, lstm_cell='standard',
+                 pad_to=0):
         
         self.dataset_file = dataset_file
         self.split_file = split_file
@@ -11,6 +12,8 @@ class Hyperparameter(object):
         # control dataset size
         self.skill_cut = skill_cut
         self.student_cut = student_cut
+        self.minlen = minlen
+        self.pad_to = pad_to
 
         # set from data set
         self.num_skills = -1
@@ -27,6 +30,8 @@ class Hyperparameter(object):
         self.clipping_norm = clipping_norm
         self.dropout_keep = dropout_keep
         self.optimizer = optimizer
+        self.learning_rate = learning_rate
+        self.lstm_cell = lstm_cell
 
         # Running Specification
         self.num_epochs = num_epochs
